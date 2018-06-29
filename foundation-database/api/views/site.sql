@@ -392,7 +392,7 @@ CREATE OR REPLACE RULE "_INSERT" AS
       NEW.address_change),
     CASE
       WHEN NEW.inventory_type THEN
-        COALESCE(getTaxZoneId(NEW.tax_zone), -1)
+       getTaxZoneId(NEW.tax_zone)
       ELSE
         NULL
     END,
