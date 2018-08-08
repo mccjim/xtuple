@@ -1,0 +1,1433 @@
+<!DOCTYPE openRPTDef>
+<report>
+ <title>Bank Reconciliation History</title>
+ <name>BankrecHistory</name>
+ <description>add filter to exclude open items greater than bank rec end date</description>
+ <grid>
+  <snap/>
+  <show/>
+  <x>0.05</x>
+  <y>0.05</y>
+ </grid>
+ <size>Letter</size>
+ <portrait/>
+ <topmargin>50</topmargin>
+ <bottommargin>50</bottommargin>
+ <rightmargin>50</rightmargin>
+ <leftmargin>50</leftmargin>
+ <querysource loadFromDb="true">
+  <name>reconciled</name>
+  <mqlgroup>bankrecHistory</mqlgroup>
+  <mqlname>reconciled</mqlname>
+ </querysource>
+ <querysource>
+  <name>head</name>
+  <sql>SELECT (bankaccnt_name || '-' || bankaccnt_descrip) AS f_bankaccnt,
+       (formatDate(bankrec_opendate) || '-' || formatDate(bankrec_enddate)) AS f_bankrec,
+       bankrec_username AS f_username, formatDate(bankrec_created) AS f_created,
+       formatDate(bankrec_opendate) AS f_opendate,
+       formatDate(bankrec_enddate) AS f_enddate,
+       formatMoney(bankrec_openbal) AS f_openbal,
+       formatMoney(bankrec_endbal) AS f_endbal,
+       text('Opening Balance') AS f_opendescrip,
+       text('Ending Balance') AS f_enddescrip
+  FROM bankrec, bankaccnt
+ WHERE ((bankrec_bankaccnt_id=bankaccnt_id)
+   AND  (bankrec_id=&lt;? value("bankrec_id") ?>));</sql>
+ </querysource>
+ <querysource>
+  <name>Subtotal</name>
+  <sql>SELECT 
+   formatMoney(COALESCE(MAX(selrec.bankrec_endbal) +
+   SUM(currtolocal(bankaccnt_curr_id,gltrans_amount,gltrans_date) * -1),0)) AS amount
+ FROM gltrans
+   JOIN bankaccnt ON (bankaccnt_accnt_id = gltrans_accnt_id)
+   JOIN bankrec selrec ON ((selrec.bankrec_bankaccnt_id = bankaccnt_id)
+                       AND (selrec.bankrec_id=&lt;? value("bankrec_id") ?>))
+   LEFT OUTER JOIN bankrecitem ON ((bankrecitem_source='GL')
+                              AND (bankrecitem_source_id=gltrans_id))
+   LEFT OUTER JOIN bankrec actrec ON (actrec.bankrec_id = bankrecitem_bankrec_id)
+ WHERE ((COALESCE(actrec.bankrec_postdate,endoftime()) > COALESCE(selrec.bankrec_postdate,now()))
+ AND (gltrans_doctype='CK')
+ AND gltrans_posted
+  AND (bankrecitem_bankrec_id IN (SELECT bankrec_id from bankrec) OR bankrecitem_bankrec_id IS NULL)
+AND gltrans_date &lt;= (select period_end from period where period_id = (select getperiodid(selrec.bankrec_enddate))))</sql>
+ </querysource>
+ <querysource>
+  <name>ActualAmount</name>
+  <sql>
+SELECT coalesce(SUM(amount),0) + (SELECT bankrec_endbal FROM bankrec WHERE bankrec_id= &lt;? value("bankrec_id") ?>) AS adjbal,
+
+(select 
+trialbal_ending * -1 AS glbalance
+FROM bankrec
+JOIN period ON period_id = getperiodid(bankrec_enddate)
+JOIN bankaccnt ON bankrec_bankaccnt_id = bankaccnt_id
+JOIN trialbal ON trialbal_accnt_id = bankaccnt_accnt_id AND period_id = trialbal_period_id
+
+where  bankrec_id = &lt;? value("bankrec_id") ?>) as glbal,
+
+coalesce(SUM(amount),0) + (SELECT bankrec_endbal FROM bankrec WHERE bankrec_id= &lt;? value("bankrec_id") ?>) -
+
+(select 
+trialbal_ending * -1 AS glbalance
+FROM bankrec
+JOIN period ON period_id = getperiodid(bankrec_enddate)
+JOIN bankaccnt ON bankrec_bankaccnt_id = bankaccnt_id
+JOIN trialbal ON trialbal_accnt_id = bankaccnt_accnt_id AND period_id = trialbal_period_id
+
+where  bankrec_id = &lt;? value("bankrec_id") ?>) as recdiff
+
+
+
+
+ FROM
+(SELECT 
+      currtolocal(bankaccnt_curr_id,gltrans_amount,gltrans_date) * -1 AS amount
+     
+ FROM gltrans
+   JOIN bankaccnt ON (bankaccnt_accnt_id = gltrans_accnt_id)
+   JOIN bankrec selrec ON ((selrec.bankrec_bankaccnt_id = bankaccnt_id)
+                       AND (selrec.bankrec_id=&lt;? value("bankrec_id") ?> ))
+   LEFT OUTER JOIN bankrecitem ON ((bankrecitem_source='GL')
+			AND bankrecitem_bankrec_id IN (SELECT bankrec_id FROM bankrec)
+                              AND (bankrecitem_source_id=gltrans_id))
+   LEFT OUTER JOIN bankrec actrec ON (actrec.bankrec_id = bankrecitem_bankrec_id)
+   LEFT OUTER JOIN checkhead ON ((gltrans_source IN ('A/P', 'A/R'))
+                             AND (gltrans_doctype='CK')
+                             AND (gltrans_misc_id=checkhead_id))
+
+ WHERE ((COALESCE(actrec.bankrec_postdate,endoftime()) > COALESCE(selrec.bankrec_postdate,now()))
+  AND (NOT gltrans_deleted)
+AND gltrans_doctype != 'JP'
+AND gltrans_date &lt;= 
+(select period_end from period where period_id = (select getperiodid(selrec.bankrec_enddate))))
+AND gltrans_id NOT IN (select gltrans_id from gltrans where gltrans_rec = true	
+AND gltrans_id NOT IN (SELECT bankrecitem_source_id from bankrecitem))
+  AND (NOT COALESCE(checkhead_void, false) 
+OR xtps.getvoidcheckdate(checkhead_number, bankaccnt_id) > (select period_end from period where period_id = (select getperiodid(selrec.bankrec_enddate)) ))
+
+UNION ALL
+
+SELECT 
+      currtolocal(bankaccnt_curr_id,sltrans_amount,sltrans_date) * -1 AS amount
+ FROM sltrans
+   JOIN bankaccnt ON (bankaccnt_accnt_id = sltrans_accnt_id)
+   JOIN bankrec selrec ON ((selrec.bankrec_bankaccnt_id = bankaccnt_id)
+                       AND (selrec.bankrec_id=&lt;? value("bankrec_id") ?> ))
+   LEFT OUTER JOIN bankrecitem ON ((bankrecitem_source='SL')
+			AND bankrecitem_bankrec_id IN (SELECT bankrec_id FROM bankrec)
+                              AND (bankrecitem_source_id=sltrans_id))
+   LEFT OUTER JOIN bankrec actrec ON (actrec.bankrec_id = bankrecitem_bankrec_id)
+   LEFT OUTER JOIN checkhead ON ((sltrans_source IN ('A/P', 'A/R'))
+                             AND (sltrans_doctype='CK')
+                             AND (sltrans_misc_id=checkhead_id))
+
+ WHERE ((COALESCE(actrec.bankrec_postdate,endoftime()) > COALESCE(selrec.bankrec_postdate,now()))
+  AND (NOT COALESCE(checkhead_void, false)))
+AND sltrans_date &lt;= 
+(select period_end from period where period_id = (select getperiodid(selrec.bankrec_enddate)))) as unrec
+
+
+
+</sql>
+ </querysource>
+ <querysource loadFromDb="true">
+  <name>unreconciled</name>
+  <mqlgroup>bankrecHistory</mqlgroup>
+  <mqlname>unreconciled</mqlname>
+ </querysource>
+ <querysource>
+  <name>periodend</name>
+  <sql>
+select 'For GL Period Ending: ' || formatDate(period_end) AS rptperiod,
+trialbal_ending * -1 AS glbalance
+FROM bankrec
+JOIN period ON period_id = getperiodid(bankrec_enddate)
+JOIN bankaccnt ON bankrec_bankaccnt_id = bankaccnt_id
+JOIN trialbal ON trialbal_accnt_id = bankaccnt_accnt_id AND period_id = trialbal_period_id
+
+where  bankrec_id = &lt;? value("bankrec_id") ?></sql>
+ </querysource>
+ <querysource>
+  <name>futureTrans</name>
+  <sql>SELECT SUM(recitem) AS recitem FROM
+(select  gltrans_amount * -1 AS recitem 
+FROM bankrecitem
+JOIN gltrans ON bankrecitem_source_id = gltrans_id AND bankrecitem_source = 'GL'
+JOIN bankrec ON bankrec_id = bankrecitem_bankrec_id AND gltrans_date >
+(SELECT  period_end FROM period WHERE period_id = getperiodid(bankrec_enddate)) 
+AND bankrec_id =  &lt;? value("bankrec_id") ?>
+
+UNION ALL
+
+select  sltrans_amount * -1 AS recitem 
+FROM bankrecitem
+JOIN sltrans ON bankrecitem_source_id = sltrans_id AND bankrecitem_source = 'SL'
+JOIN bankrec ON bankrec_id = bankrecitem_bankrec_id AND
+(SELECT gltrans_date FROM gltrans WHERE gltrans_journalnumber = sltrans_gltrans_journalnumber LIMIT 1) >
+(SELECT  period_end FROM period WHERE period_id = getperiodid(bankrec_enddate)) 
+AND bankrec_id =  &lt;? value("bankrec_id") ?>) as balamt</sql>
+ </querysource>
+ <rpthead>
+  <height>159</height>
+  <label>
+   <rect>
+    <x>645</x>
+    <y>100</y>
+    <width>100</width>
+    <height>15</height>
+   </rect>
+   <font>
+    <face>Arial</face>
+    <size>8</size>
+    <weight>normal</weight>
+   </font>
+   <hcenter/>
+   <vcenter/>
+   <string>Amount</string>
+  </label>
+  <label>
+   <rect>
+    <x>370</x>
+    <y>50</y>
+    <width>100</width>
+    <height>15</height>
+   </rect>
+   <font>
+    <face>Arial</face>
+    <size>8</size>
+    <weight>normal</weight>
+   </font>
+   <right/>
+   <vcenter/>
+   <string>Posted By:</string>
+  </label>
+  <field>
+   <rect>
+    <x>100</x>
+    <y>139</y>
+    <width>535</width>
+    <height>15</height>
+   </rect>
+   <font>
+    <face>Arial</face>
+    <size>8</size>
+    <weight>bold</weight>
+   </font>
+   <left/>
+   <vcenter/>
+   <data>
+    <query>head</query>
+    <column>f_opendescrip</column>
+   </data>
+  </field>
+  <label>
+   <rect>
+    <x>100</x>
+    <y>100</y>
+    <width>150</width>
+    <height>15</height>
+   </rect>
+   <font>
+    <face>Arial</face>
+    <size>8</size>
+    <weight>normal</weight>
+   </font>
+   <left/>
+   <vcenter/>
+   <string>Doc. Number/Notes</string>
+  </label>
+  <field>
+   <rect>
+    <x>145</x>
+    <y>65</y>
+    <width>220</width>
+    <height>15</height>
+   </rect>
+   <font>
+    <face>Arial</face>
+    <size>8</size>
+    <weight>bold</weight>
+   </font>
+   <left/>
+   <vcenter/>
+   <data>
+    <query>head</query>
+    <column>f_bankrec</column>
+   </data>
+  </field>
+  <line>
+   <xstart>5</xstart>
+   <ystart>115</ystart>
+   <xend>745</xend>
+   <yend>115</yend>
+   <weight>2</weight>
+  </line>
+  <label>
+   <rect>
+    <x>370</x>
+    <y>65</y>
+    <width>100</width>
+    <height>15</height>
+   </rect>
+   <font>
+    <face>Arial</face>
+    <size>8</size>
+    <weight>normal</weight>
+   </font>
+   <right/>
+   <vcenter/>
+   <string>Date Posted:</string>
+  </label>
+  <field>
+   <rect>
+    <x>145</x>
+    <y>50</y>
+    <width>245</width>
+    <height>15</height>
+   </rect>
+   <font>
+    <face>Arial</face>
+    <size>8</size>
+    <weight>bold</weight>
+   </font>
+   <left/>
+   <vcenter/>
+   <data>
+    <query>head</query>
+    <column>f_bankaccnt</column>
+   </data>
+  </field>
+  <field>
+   <rect>
+    <x>475</x>
+    <y>65</y>
+    <width>220</width>
+    <height>15</height>
+   </rect>
+   <font>
+    <face>Arial</face>
+    <size>8</size>
+    <weight>bold</weight>
+   </font>
+   <left/>
+   <vcenter/>
+   <data>
+    <query>head</query>
+    <column>f_created</column>
+   </data>
+  </field>
+  <label>
+   <rect>
+    <x>10</x>
+    <y>100</y>
+    <width>75</width>
+    <height>15</height>
+   </rect>
+   <font>
+    <face>Arial</face>
+    <size>8</size>
+    <weight>normal</weight>
+   </font>
+   <left/>
+   <vcenter/>
+   <string>Dist. Date</string>
+  </label>
+  <label>
+   <rect>
+    <x>25</x>
+    <y>65</y>
+    <width>117</width>
+    <height>15</height>
+   </rect>
+   <font>
+    <face>Arial</face>
+    <size>8</size>
+    <weight>normal</weight>
+   </font>
+   <right/>
+   <vcenter/>
+   <string>Bank Rec. Post:</string>
+  </label>
+  <field>
+   <rect>
+    <x>10</x>
+    <y>139</y>
+    <width>80</width>
+    <height>15</height>
+   </rect>
+   <font>
+    <face>Arial</face>
+    <size>8</size>
+    <weight>bold</weight>
+   </font>
+   <hcenter/>
+   <vcenter/>
+   <data>
+    <query>head</query>
+    <column>f_opendate</column>
+   </data>
+  </field>
+  <field>
+   <rect>
+    <x>475</x>
+    <y>50</y>
+    <width>220</width>
+    <height>15</height>
+   </rect>
+   <font>
+    <face>Arial</face>
+    <size>8</size>
+    <weight>bold</weight>
+   </font>
+   <left/>
+   <vcenter/>
+   <data>
+    <query>head</query>
+    <column>f_username</column>
+   </data>
+  </field>
+  <label>
+   <rect>
+    <x>40</x>
+    <y>50</y>
+    <width>100</width>
+    <height>15</height>
+   </rect>
+   <font>
+    <face>Arial</face>
+    <size>8</size>
+    <weight>normal</weight>
+   </font>
+   <right/>
+   <vcenter/>
+   <string>Bark Account:</string>
+  </label>
+  <label>
+   <rect>
+    <x>280</x>
+    <y>5</y>
+    <width>465</width>
+    <height>38</height>
+   </rect>
+   <font>
+    <face>Arial</face>
+    <size>18</size>
+    <weight>bold</weight>
+   </font>
+   <right/>
+   <vcenter/>
+   <string>Bank Reconciliation History</string>
+  </label>
+  <field>
+   <rect>
+    <x>645</x>
+    <y>139</y>
+    <width>100</width>
+    <height>15</height>
+   </rect>
+   <font>
+    <face>Arial</face>
+    <size>8</size>
+    <weight>bold</weight>
+   </font>
+   <right/>
+   <vcenter/>
+   <data>
+    <query>head</query>
+    <column>f_openbal</column>
+   </data>
+  </field>
+  <label>
+   <rect>
+    <x>5</x>
+    <y>125</y>
+    <width>121</width>
+    <height>15</height>
+   </rect>
+   <font>
+    <face>Arial</face>
+    <size>9</size>
+    <weight>bold</weight>
+   </font>
+   <left/>
+   <vcenter/>
+   <string>Reconciled</string>
+  </label>
+  <field>
+   <rect>
+    <x>425</x>
+    <y>34</y>
+    <width>305</width>
+    <height>15</height>
+   </rect>
+   <font>
+    <face>Arial</face>
+    <size>8</size>
+    <weight>normal</weight>
+   </font>
+   <right/>
+   <vcenter/>
+   <data>
+    <query>periodend</query>
+    <column>rptperiod</column>
+   </data>
+  </field>
+  <line>
+   <xstart>645</xstart>
+   <ystart>154</ystart>
+   <xend>745</xend>
+   <yend>154</yend>
+   <weight>0</weight>
+  </line>
+ </rpthead>
+ <pghead>
+  <firstpage/>
+  <height>0</height>
+ </pghead>
+ <pghead>
+  <height>31</height>
+  <line>
+   <xstart>5</xstart>
+   <ystart>15</ystart>
+   <xend>745</xend>
+   <yend>15</yend>
+   <weight>2</weight>
+  </line>
+  <label>
+   <rect>
+    <x>100</x>
+    <y>0</y>
+    <width>150</width>
+    <height>15</height>
+   </rect>
+   <font>
+    <face>Arial</face>
+    <size>8</size>
+    <weight>normal</weight>
+   </font>
+   <left/>
+   <vcenter/>
+   <string>Doc. Number/Notes</string>
+  </label>
+  <label>
+   <rect>
+    <x>10</x>
+    <y>0</y>
+    <width>75</width>
+    <height>15</height>
+   </rect>
+   <font>
+    <face>Arial</face>
+    <size>8</size>
+    <weight>normal</weight>
+   </font>
+   <left/>
+   <vcenter/>
+   <string>Dist. Date</string>
+  </label>
+  <label>
+   <rect>
+    <x>645</x>
+    <y>0</y>
+    <width>100</width>
+    <height>15</height>
+   </rect>
+   <font>
+    <face>Arial</face>
+    <size>8</size>
+    <weight>normal</weight>
+   </font>
+   <hcenter/>
+   <vcenter/>
+   <string>Amount</string>
+  </label>
+ </pghead>
+ <section>
+  <name>reconciled</name>
+  <group>
+   <name>reconciled-group</name>
+   <column>amount_xtnumericrole</column>
+   <foot>
+    <height>25</height>
+    <field>
+     <rect>
+      <x>645</x>
+      <y>2.70894e-14</y>
+      <width>100</width>
+      <height>15</height>
+     </rect>
+     <font>
+      <face>Arial</face>
+      <size>8</size>
+      <weight>bold</weight>
+     </font>
+     <right/>
+     <vcenter/>
+     <data>
+      <query>head</query>
+      <column>f_endbal</column>
+     </data>
+    </field>
+    <field>
+     <rect>
+      <x>10</x>
+      <y>3.28</y>
+      <width>80</width>
+      <height>15</height>
+     </rect>
+     <font>
+      <face>Arial</face>
+      <size>8</size>
+      <weight>bold</weight>
+     </font>
+     <hcenter/>
+     <vcenter/>
+     <data>
+      <query>head</query>
+      <column>f_enddate</column>
+     </data>
+    </field>
+    <field>
+     <rect>
+      <x>100</x>
+      <y>3.28</y>
+      <width>200</width>
+      <height>15</height>
+     </rect>
+     <font>
+      <face>Arial</face>
+      <size>8</size>
+      <weight>bold</weight>
+     </font>
+     <left/>
+     <vcenter/>
+     <data>
+      <query>head</query>
+      <column>f_enddescrip</column>
+     </data>
+    </field>
+    <line>
+     <xstart>645</xstart>
+     <ystart>20</ystart>
+     <xend>745</xend>
+     <yend>20</yend>
+     <weight>0</weight>
+    </line>
+    <line>
+     <xstart>645</xstart>
+     <ystart>15</ystart>
+     <xend>745</xend>
+     <yend>15</yend>
+     <weight>0</weight>
+    </line>
+   </foot>
+  </group>
+  <group>
+   <name>reconciled-type</name>
+   <column>sort</column>
+   <head>
+    <height>27</height>
+    <field>
+     <rect>
+      <x>10</x>
+      <y>6.78</y>
+      <width>94</width>
+      <height>15</height>
+     </rect>
+     <font>
+      <face>Arial</face>
+      <size>8</size>
+      <weight>bold</weight>
+     </font>
+     <left/>
+     <vcenter/>
+     <data>
+      <query>reconciled</query>
+      <column>type</column>
+     </data>
+    </field>
+   </head>
+   <foot>
+    <height>25</height>
+    <field>
+     <rect>
+      <x>645</x>
+      <y>5</y>
+      <width>100</width>
+      <height>15</height>
+     </rect>
+     <font>
+      <face>Arial</face>
+      <size>8</size>
+      <weight>bold</weight>
+     </font>
+     <right/>
+     <vcenter/>
+     <data>
+      <query>reconciled</query>
+      <column>amount</column>
+     </data>
+     <format builtin="true">qty</format>
+     <tracktotal subtotal="true"/>
+    </field>
+    <field>
+     <rect>
+      <x>435</x>
+      <y>5</y>
+      <width>168</width>
+      <height>15</height>
+     </rect>
+     <font>
+      <face>Arial</face>
+      <size>8</size>
+      <weight>bold</weight>
+     </font>
+     <left/>
+     <vcenter/>
+     <data>
+      <query>reconciled</query>
+      <column>type</column>
+     </data>
+    </field>
+    <label>
+     <rect>
+      <x>400</x>
+      <y>5</y>
+      <width>49</width>
+      <height>15</height>
+     </rect>
+     <font>
+      <face>Arial</face>
+      <size>8</size>
+      <weight>normal</weight>
+     </font>
+     <left/>
+     <vcenter/>
+     <string>TOTAL</string>
+    </label>
+    <line>
+     <xstart>645</xstart>
+     <ystart>20</ystart>
+     <xend>745</xend>
+     <yend>20</yend>
+     <weight>0</weight>
+    </line>
+    <line>
+     <xstart>645</xstart>
+     <ystart>5</ystart>
+     <xend>745</xend>
+     <yend>5</yend>
+     <weight>0</weight>
+    </line>
+   </foot>
+  </group>
+  <detail>
+   <key>
+    <query>reconciled</query>
+   </key>
+   <height>16</height>
+   <field>
+    <rect>
+     <x>645</x>
+     <y>0</y>
+     <width>100</width>
+     <height>15</height>
+    </rect>
+    <font>
+     <face>Arial</face>
+     <size>8</size>
+     <weight>bold</weight>
+    </font>
+    <right/>
+    <vcenter/>
+    <data>
+     <query>reconciled</query>
+     <column>f_amount</column>
+    </data>
+   </field>
+   <field>
+    <rect>
+     <x>10</x>
+     <y>0</y>
+     <width>80</width>
+     <height>15</height>
+    </rect>
+    <font>
+     <face>Arial</face>
+     <size>8</size>
+     <weight>bold</weight>
+    </font>
+    <hcenter/>
+    <vcenter/>
+    <data>
+     <query>reconciled</query>
+     <column>f_date</column>
+    </data>
+   </field>
+   <field>
+    <rect>
+     <x>100</x>
+     <y>0</y>
+     <width>100</width>
+     <height>15</height>
+    </rect>
+    <font>
+     <face>Arial</face>
+     <size>8</size>
+     <weight>bold</weight>
+    </font>
+    <left/>
+    <vcenter/>
+    <data>
+     <query>reconciled</query>
+     <column>gltrans_docnumber</column>
+    </data>
+   </field>
+   <text>
+    <rect>
+     <x>215</x>
+     <y>0</y>
+     <width>420</width>
+     <height>15</height>
+    </rect>
+    <bottompad>0</bottompad>
+    <font>
+     <face>Arial</face>
+     <size>8</size>
+     <weight>normal</weight>
+    </font>
+    <left/>
+    <vcenter/>
+    <data>
+     <query>reconciled</query>
+     <column>notes</column>
+    </data>
+   </text>
+  </detail>
+ </section>
+ <section>
+  <name>unreconciled</name>
+  <group>
+   <name>unreconciled-group</name>
+   <column>amount_xtnumericrole</column>
+   <head>
+    <height>33</height>
+    <label>
+     <rect>
+      <x>5</x>
+      <y>5</y>
+      <width>121</width>
+      <height>20</height>
+     </rect>
+     <font>
+      <face>Arial</face>
+      <size>9</size>
+      <weight>bold</weight>
+     </font>
+     <left/>
+     <vcenter/>
+     <string>Unreconciled</string>
+    </label>
+    <line>
+     <xstart>0</xstart>
+     <ystart>25</ystart>
+     <xend>750</xend>
+     <yend>25</yend>
+     <weight>0</weight>
+    </line>
+   </head>
+   <foot>
+    <height>136.499</height>
+    <label>
+     <rect>
+      <x>455</x>
+      <y>49</y>
+      <width>162</width>
+      <height>15</height>
+     </rect>
+     <font>
+      <face>Arial</face>
+      <size>8</size>
+      <weight>normal</weight>
+     </font>
+     <right/>
+     <vcenter/>
+     <string>Checks in Circulation:</string>
+    </label>
+    <label>
+     <rect>
+      <x>5</x>
+      <y>12.5</y>
+      <width>235</width>
+      <height>15.5</height>
+     </rect>
+     <font>
+      <face>Arial</face>
+      <size>9</size>
+      <weight>bold</weight>
+     </font>
+     <left/>
+     <vcenter/>
+     <string>General Legder Reconciliation</string>
+    </label>
+    <label>
+     <rect>
+      <x>450</x>
+      <y>69</y>
+      <width>163</width>
+      <height>15</height>
+     </rect>
+     <font>
+      <face>Arial</face>
+      <size>8</size>
+      <weight>normal</weight>
+     </font>
+     <right/>
+     <vcenter/>
+     <string>Deposits in Circulation:</string>
+    </label>
+    <label>
+     <rect>
+      <x>395</x>
+      <y>113</y>
+      <width>219</width>
+      <height>15</height>
+     </rect>
+     <font>
+      <face>Arial</face>
+      <size>8</size>
+      <weight>normal</weight>
+     </font>
+     <right/>
+     <vcenter/>
+     <string>Actual Account Balance:</string>
+    </label>
+    <label>
+     <rect>
+      <x>455</x>
+      <y>20</y>
+      <width>162</width>
+      <height>15</height>
+     </rect>
+     <font>
+      <face>Arial</face>
+      <size>8</size>
+      <weight>normal</weight>
+     </font>
+     <right/>
+     <vcenter/>
+     <string>Ending Reconciled Balance:</string>
+    </label>
+    <field>
+     <rect>
+      <x>640</x>
+      <y>20</y>
+      <width>100</width>
+      <height>15</height>
+     </rect>
+     <font>
+      <face>Arial</face>
+      <size>8</size>
+      <weight>bold</weight>
+     </font>
+     <right/>
+     <vcenter/>
+     <data>
+      <query>head</query>
+      <column>f_endbal</column>
+     </data>
+    </field>
+    <field>
+     <rect>
+      <x>640</x>
+      <y>49</y>
+      <width>100</width>
+      <height>15</height>
+     </rect>
+     <font>
+      <face>Arial</face>
+      <size>8</size>
+      <weight>bold</weight>
+     </font>
+     <right/>
+     <vcenter/>
+     <data>
+      <query>unreconciled</query>
+      <column>rtcheck</column>
+     </data>
+     <format builtin="true">money</format>
+     <tracktotal/>
+    </field>
+    <field>
+     <rect>
+      <x>640</x>
+      <y>69</y>
+      <width>100</width>
+      <height>15</height>
+     </rect>
+     <font>
+      <face>Arial</face>
+      <size>8</size>
+      <weight>bold</weight>
+     </font>
+     <right/>
+     <vcenter/>
+     <data>
+      <query>unreconciled</query>
+      <column>rtdep</column>
+     </data>
+     <format builtin="true">money</format>
+     <tracktotal/>
+    </field>
+    <field>
+     <rect>
+      <x>641</x>
+      <y>89.5</y>
+      <width>100</width>
+      <height>15</height>
+     </rect>
+     <font>
+      <face>Arial</face>
+      <size>8</size>
+      <weight>bold</weight>
+     </font>
+     <right/>
+     <vcenter/>
+     <data>
+      <query>unreconciled</query>
+      <column>rtadj</column>
+     </data>
+     <format builtin="true">money</format>
+     <tracktotal/>
+    </field>
+    <field>
+     <rect>
+      <x>640</x>
+      <y>111</y>
+      <width>100</width>
+      <height>15</height>
+     </rect>
+     <font>
+      <face>Arial</face>
+      <size>8</size>
+      <weight>bold</weight>
+     </font>
+     <right/>
+     <vcenter/>
+     <data>
+      <query>ActualAmount</query>
+      <column>adjbal</column>
+     </data>
+     <format builtin="true">money</format>
+    </field>
+    <label>
+     <rect>
+      <x>440</x>
+      <y>88</y>
+      <width>177</width>
+      <height>15</height>
+     </rect>
+     <font>
+      <face>Arial</face>
+      <size>8</size>
+      <weight>normal</weight>
+     </font>
+     <right/>
+     <vcenter/>
+     <string> Adjustments in Circulation:</string>
+    </label>
+    <line>
+     <xstart>629</xstart>
+     <ystart>108</ystart>
+     <xend>744</xend>
+     <yend>108</yend>
+     <weight>0</weight>
+    </line>
+    <line>
+     <xstart>628</xstart>
+     <ystart>127</ystart>
+     <xend>743</xend>
+     <yend>127</yend>
+     <weight>0</weight>
+    </line>
+    <line>
+     <xstart>625</xstart>
+     <ystart>35</ystart>
+     <xend>745</xend>
+     <yend>35</yend>
+     <weight>0</weight>
+    </line>
+    <line>
+     <xstart>0</xstart>
+     <ystart>5</ystart>
+     <xend>750</xend>
+     <yend>5</yend>
+     <weight>2</weight>
+    </line>
+   </foot>
+  </group>
+  <group>
+   <name>unreconciled-type</name>
+   <column>type</column>
+   <head>
+    <height>26.0233</height>
+    <field>
+     <rect>
+      <x>10</x>
+      <y>4.9</y>
+      <width>94</width>
+      <height>15</height>
+     </rect>
+     <font>
+      <face>Arial</face>
+      <size>8</size>
+      <weight>bold</weight>
+     </font>
+     <left/>
+     <vcenter/>
+     <data>
+      <query>unreconciled</query>
+      <column>type</column>
+     </data>
+    </field>
+    <line>
+     <xstart>0</xstart>
+     <ystart>22</ystart>
+     <xend>100</xend>
+     <yend>22</yend>
+     <weight>0</weight>
+    </line>
+   </head>
+   <foot>
+    <height>44.501</height>
+    <field>
+     <rect>
+      <x>640</x>
+      <y>14.501</y>
+      <width>100</width>
+      <height>15</height>
+     </rect>
+     <font>
+      <face>Arial</face>
+      <size>8</size>
+      <weight>bold</weight>
+     </font>
+     <right/>
+     <vcenter/>
+     <data>
+      <query>unreconciled</query>
+      <column>amount</column>
+     </data>
+     <format builtin="true">money</format>
+     <tracktotal subtotal="true"/>
+    </field>
+    <field>
+     <rect>
+      <x>520</x>
+      <y>14.501</y>
+      <width>94</width>
+      <height>15</height>
+     </rect>
+     <font>
+      <face>Arial</face>
+      <size>8</size>
+      <weight>bold</weight>
+     </font>
+     <left/>
+     <vcenter/>
+     <data>
+      <query>unreconciled</query>
+      <column>type</column>
+     </data>
+    </field>
+    <line>
+     <xstart>650</xstart>
+     <ystart>9.501</ystart>
+     <xend>750</xend>
+     <yend>9.501</yend>
+     <weight>0</weight>
+    </line>
+    <line>
+     <xstart>645</xstart>
+     <ystart>34.501</ystart>
+     <xend>745</xend>
+     <yend>34.501</yend>
+     <weight>0</weight>
+    </line>
+   </foot>
+  </group>
+  <detail>
+   <key>
+    <query>unreconciled</query>
+   </key>
+   <height>16.9767</height>
+   <field>
+    <rect>
+     <x>10</x>
+     <y>0</y>
+     <width>80</width>
+     <height>15</height>
+    </rect>
+    <font>
+     <face>Arial</face>
+     <size>8</size>
+     <weight>bold</weight>
+    </font>
+    <hcenter/>
+    <vcenter/>
+    <data>
+     <query>unreconciled</query>
+     <column>f_date</column>
+    </data>
+   </field>
+   <field>
+    <rect>
+     <x>100</x>
+     <y>0</y>
+     <width>94</width>
+     <height>15</height>
+    </rect>
+    <font>
+     <face>Arial</face>
+     <size>8</size>
+     <weight>bold</weight>
+    </font>
+    <left/>
+    <vcenter/>
+    <data>
+     <query>unreconciled</query>
+     <column>gltrans_docnumber</column>
+    </data>
+   </field>
+   <field>
+    <rect>
+     <x>645</x>
+     <y>0</y>
+     <width>100</width>
+     <height>15</height>
+    </rect>
+    <font>
+     <face>Arial</face>
+     <size>8</size>
+     <weight>bold</weight>
+    </font>
+    <right/>
+    <vcenter/>
+    <data>
+     <query>unreconciled</query>
+     <column>amount</column>
+    </data>
+    <format builtin="true">money</format>
+   </field>
+   <text>
+    <rect>
+     <x>210</x>
+     <y>0.9767</y>
+     <width>425</width>
+     <height>15</height>
+    </rect>
+    <bottompad>0</bottompad>
+    <font>
+     <face>Arial</face>
+     <size>8</size>
+     <weight>normal</weight>
+    </font>
+    <left/>
+    <vcenter/>
+    <data>
+     <query>unreconciled</query>
+     <column>notes</column>
+    </data>
+   </text>
+  </detail>
+ </section>
+ <pgfoot>
+  <height>15</height>
+  <field>
+   <rect>
+    <x>705</x>
+    <y>-2.499</y>
+    <width>40</width>
+    <height>15</height>
+   </rect>
+   <font>
+    <face>Arial</face>
+    <size>8</size>
+    <weight>bold</weight>
+   </font>
+   <left/>
+   <vcenter/>
+   <data>
+    <query>Context Query</query>
+    <column>page_number</column>
+   </data>
+  </field>
+  <label>
+   <rect>
+    <x>0</x>
+    <y>0</y>
+    <width>75</width>
+    <height>15</height>
+   </rect>
+   <font>
+    <face>Arial</face>
+    <size>8</size>
+    <weight>normal</weight>
+   </font>
+   <right/>
+   <vcenter/>
+   <string>Report Date:</string>
+  </label>
+  <label>
+   <rect>
+    <x>615</x>
+    <y>-2.499</y>
+    <width>85</width>
+    <height>15</height>
+   </rect>
+   <font>
+    <face>Arial</face>
+    <size>8</size>
+    <weight>normal</weight>
+   </font>
+   <right/>
+   <vcenter/>
+   <string>Page:</string>
+  </label>
+  <field>
+   <rect>
+    <x>80</x>
+    <y>-2.499</y>
+    <width>100</width>
+    <height>15</height>
+   </rect>
+   <font>
+    <face>Arial</face>
+    <size>8</size>
+    <weight>bold</weight>
+   </font>
+   <left/>
+   <vcenter/>
+   <data>
+    <query>Context Query</query>
+    <column>report_date</column>
+   </data>
+  </field>
+ </pgfoot>
+ <rptfoot>
+  <height>65</height>
+  <field>
+   <rect>
+    <x>630</x>
+    <y>10</y>
+    <width>100</width>
+    <height>15</height>
+   </rect>
+   <font>
+    <face>Arial</face>
+    <size>8</size>
+    <weight>bold</weight>
+   </font>
+   <right/>
+   <vcenter/>
+   <data>
+    <query>periodend</query>
+    <column>glbalance</column>
+   </data>
+   <format builtin="true">money</format>
+  </field>
+  <field>
+   <rect>
+    <x>630</x>
+    <y>30</y>
+    <width>100</width>
+    <height>30</height>
+   </rect>
+   <font>
+    <face>Arial</face>
+    <size>12</size>
+    <weight>bold</weight>
+   </font>
+   <right/>
+   <vcenter/>
+   <data>
+    <query>ActualAmount</query>
+    <column>recdiff</column>
+   </data>
+   <format builtin="true">money</format>
+  </field>
+  <field>
+   <rect>
+    <x>310</x>
+    <y>10</y>
+    <width>305</width>
+    <height>15</height>
+   </rect>
+   <font>
+    <face>Arial</face>
+    <size>8</size>
+    <weight>normal</weight>
+   </font>
+   <right/>
+   <vcenter/>
+   <data>
+    <query>periodend</query>
+    <column>rptperiod</column>
+   </data>
+  </field>
+  <label>
+   <rect>
+    <x>490</x>
+    <y>30</y>
+    <width>115</width>
+    <height>25</height>
+   </rect>
+   <font>
+    <face>Helvetica</face>
+    <size>12</size>
+    <weight>normal</weight>
+   </font>
+   <right/>
+   <vcenter/>
+   <string>Difference:</string>
+  </label>
+  <field>
+   <rect>
+    <x>320</x>
+    <y>30</y>
+    <width>100</width>
+    <height>25</height>
+   </rect>
+   <font>
+    <face>Helvetica</face>
+    <size>8</size>
+    <weight>normal</weight>
+   </font>
+   <right/>
+   <vcenter/>
+   <data>
+    <query>futureTrans</query>
+    <column>recitem</column>
+   </data>
+   <format builtin="true">money</format>
+  </field>
+  <label>
+   <rect>
+    <x>75</x>
+    <y>30</y>
+    <width>235</width>
+    <height>25</height>
+   </rect>
+   <font>
+    <face>Helvetica</face>
+    <size>8</size>
+    <weight>normal</weight>
+   </font>
+   <right/>
+   <vcenter/>
+   <string>Clear from future period</string>
+  </label>
+ </rptfoot>
+</report>
